@@ -14,41 +14,30 @@ bot = Bot(token=TOKEN)
 posted_rows = set()
 
 
-# ---------------------------
-# Fetch Google Sheet CSV
-# ---------------------------
 def fetch_sheet():
+    print("Fetching sheet...")
 
     r = requests.get(SHEET_URL)
     r.raise_for_status()
 
     lines = r.text.splitlines()
+
     reader = csv.DictReader(lines)
 
     rows = []
 
     for row in reader:
-
-        clean_row = {}
-
+        clean = {}
         for k, v in row.items():
+            if k:
+                clean[k.strip().lower()] = v.strip() if v else ""
+        rows.append(clean)
 
-            if not k:
-                continue
-
-            key = k.strip().lower()
-            val = v.strip() if v else ""
-
-            clean_row[key] = val
-
-        rows.append(clean_row)
+    print("Rows found:", len(rows))
 
     return rows
 
 
-# ---------------------------
-# Parse date + time
-# ---------------------------
 def parse_datetime(date_str, time_str):
 
     formats = [
@@ -69,9 +58,6 @@ def parse_datetime(date_str, time_str):
     return None
 
 
-# ---------------------------
-# Build message text
-# ---------------------------
 def build_message(row):
 
     ptype = row.get("type", "").lower()
@@ -87,7 +73,6 @@ def build_message(row):
             correct = int(float(correct))
         except:
             correct = 1
-
         return f"/quiz {text} | {options.replace('|',' | ')} | {correct}"
 
     if ptype == "cta":
@@ -96,25 +81,6 @@ def build_message(row):
     return text
 
 
-# ---------------------------
-# Send message
-# ---------------------------
-async def send_post(row):
-
-    msg = build_message(row)
-    image = row.get("image_url", "")
-
-    print("Posting:", msg)
-
-    if image:
-        await bot.send_photo(GROUP_ID, photo=image, caption=msg)
-    else:
-        await bot.send_message(GROUP_ID, msg)
-
-
-# ---------------------------
-# Scheduler loop
-# ---------------------------
 async def scheduler():
 
     while True:
@@ -122,34 +88,43 @@ async def scheduler():
         try:
             rows = fetch_sheet()
         except Exception as e:
-            print("Sheet fetch error:", e)
+            print("Sheet error:", e)
             await asyncio.sleep(120)
             continue
 
         now = datetime.now()
+
+        print("Current time:", now)
 
         for i, row in enumerate(rows):
 
             if i in posted_rows:
                 continue
 
+            print("Row:", row)
+
             date_val = row.get("date")
             time_val = row.get("time")
 
             if not date_val or not time_val:
+                print("Skipping row due to missing date/time")
                 continue
 
             scheduled = parse_datetime(date_val, time_val)
 
             if not scheduled:
+                print("Invalid date format:", date_val, time_val)
                 continue
 
-            print("Scheduled:", scheduled, "Now:", now)
+            print("Scheduled:", scheduled)
 
             if now >= scheduled:
 
+                msg = build_message(row)
+
                 try:
-                    await send_post(row)
+                    await bot.send_message(GROUP_ID, msg)
+                    print("Posted:", msg)
                     posted_rows.add(i)
                 except Exception as e:
                     print("Send error:", e)
@@ -157,9 +132,6 @@ async def scheduler():
         await asyncio.sleep(120)
 
 
-# ---------------------------
-# Main
-# ---------------------------
 async def main():
 
     await bot.delete_webhook(drop_pending_updates=True)
