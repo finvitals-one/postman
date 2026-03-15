@@ -1,31 +1,45 @@
 import os
 import csv
 import asyncio
+import sqlite3
 import requests
-from datetime import datetime, timedelta
 
+from datetime import datetime
 from aiogram import Bot
+
+
+print("POSTMAN BOT LOADING")
+
 
 TOKEN = os.getenv("POSTMAN_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
-SHEET_URL = os.getenv("SHEET_URL")
+SHEET_URL = os.getenv("POSTMAN_SHEET_URL")
 
 bot = Bot(token=TOKEN)
 
-posted_rows = set()
+conn = sqlite3.connect("postman.db")
+cursor = conn.cursor()
 
 
-# ---------- Fetch Google Sheet ----------
+# ---------------- DATABASE ----------------
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS posted(
+row_key TEXT PRIMARY KEY
+)
+""")
+
+conn.commit()
+
+
+# ---------------- SHEET ----------------
 
 def fetch_sheet():
-
-    print("Fetching sheet...")
 
     r = requests.get(SHEET_URL)
     r.raise_for_status()
 
     lines = r.content.decode("utf-8").splitlines()
-
     reader = csv.DictReader(lines)
 
     rows = []
@@ -35,190 +49,150 @@ def fetch_sheet():
         clean = {}
 
         for k, v in row.items():
-
             if k:
-                key = k.strip().lower()
-                clean[key] = v.strip() if v else ""
+                clean[k.strip().lower()] = v.strip() if v else ""
 
         rows.append(clean)
 
-    print("Rows found:", len(rows))
+    print(f"Rows fetched: {len(rows)}")
 
     return rows
 
 
-# ---------- Parse Date Time ----------
+# ---------------- PARSE DATETIME ----------------
 
 def parse_datetime(date_str, time_str):
 
     formats = [
-
-        ("%d/%m/%Y", "%H:%M:%S"),
         ("%d/%m/%Y", "%H:%M"),
-
-        ("%d-%m-%Y", "%H:%M:%S"),
+        ("%d/%m/%Y", "%H:%M:%S"),
         ("%d-%m-%Y", "%H:%M"),
-
-        ("%Y-%m-%d", "%H:%M:%S"),
-        ("%Y-%m-%d", "%H:%M")
-
+        ("%d-%m-%Y", "%H:%M:%S"),
+        ("%Y-%m-%d", "%H:%M"),
+        ("%Y-%m-%d", "%H:%M:%S")
     ]
 
     for df, tf in formats:
-
         try:
             return datetime.strptime(
                 f"{date_str} {time_str}",
                 f"{df} {tf}"
             )
-
         except:
             pass
 
     return None
 
 
-# ---------- Build Telegram Message ----------
+# ---------------- ROW KEY ----------------
 
-def build_message(row):
-
-    ptype = row.get("type", "").lower()
-
-    text = row.get("content", "")
-    options = row.get("options", "")
-    correct = row.get("correct", "")
-
-    if ptype == "poll":
-
-        return f"/poll {text} | {options.replace('|',' | ')}"
+def row_key(row):
+    return f"{row['date']}_{row['time']}_{row['type']}"
 
 
-    if ptype == "quiz":
-
-        try:
-            correct = int(float(correct))
-        except:
-            correct = 1
-
-        return f"/quiz {text} | {options.replace('|',' | ')} | {correct}"
-
-
-    if ptype == "cta":
-
-        return f"/cta {text} | {options.replace('|',' | ')}"
-
-
-    return text
-
-
-# ---------- Send Post ----------
+# ---------------- SEND POST ----------------
 
 async def send_post(row):
 
-    message = build_message(row)
+    content = row.get("content", "").strip()
+    image_url = row.get("image_url", "").strip()
 
-    image = row.get("image_url", "")
+    if not content:
+        print("Empty content, skipping")
+        return
 
-    if image:
+    if image_url:
 
         await bot.send_photo(
-            GROUP_ID,
-            photo=image,
-            caption=message
+            chat_id=GROUP_ID,
+            photo=image_url,
+            caption=content,
+            parse_mode="HTML"
         )
 
     else:
 
         await bot.send_message(
-            GROUP_ID,
-            message
+            chat_id=GROUP_ID,
+            text=content,
+            parse_mode="HTML"
         )
 
+    print(f"Posted: {content[:60]}...")
 
-# ---------- Scheduler Loop ----------
+
+# ---------------- SCHEDULER ----------------
 
 async def scheduler():
+
+    print("Postman scheduler started")
 
     while True:
 
         try:
-
             rows = fetch_sheet()
 
         except Exception as e:
-
-            print("Sheet error:", e)
-
-            await asyncio.sleep(120)
-
+            print(f"Sheet error: {e}")
+            await asyncio.sleep(300)
             continue
 
+        now = datetime.now()
+        print(f"Current time: {now}")
 
-        # Convert server time → IST
+        for row in rows:
 
-        now = datetime.utcnow() + timedelta(hours=5, minutes=30)
+            ptype = row.get("type", "").lower()
 
-        print("Current IST time:", now)
-
-
-        for i, row in enumerate(rows):
-
-            if i in posted_rows:
+            if ptype != "post":
                 continue
-
-
-            print("Row:", row)
-
 
             date_val = row.get("date")
             time_val = row.get("time")
 
-
             if not date_val or not time_val:
-
-                print("Skipping row due to missing date/time")
-
                 continue
-
 
             scheduled = parse_datetime(date_val, time_val)
 
-
             if not scheduled:
-
-                print("Invalid date format:", date_val, time_val)
-
+                print(f"Invalid datetime: {date_val} {time_val}")
                 continue
-
-
-            print("Scheduled:", scheduled)
-
 
             if now >= scheduled:
 
-                try:
+                key = row_key(row)
 
+                cursor.execute(
+                    "SELECT 1 FROM posted WHERE row_key=?",
+                    (key,)
+                )
+
+                if cursor.fetchone():
+                    continue
+
+                try:
                     await send_post(row)
 
-                    posted_rows.add(i)
+                    cursor.execute(
+                        "INSERT INTO posted(row_key) VALUES(?)",
+                        (key,)
+                    )
 
-                    print("Posted successfully")
+                    conn.commit()
+                    print(f"Marked as posted: {key}")
 
                 except Exception as e:
+                    print(f"Post error: {e}")
 
-                    print("Send error:", e)
-
-
-        await asyncio.sleep(120)
+        await asyncio.sleep(300)
 
 
-# ---------- Main ----------
+# ---------------- MAIN ----------------
 
 async def main():
 
     await bot.delete_webhook(drop_pending_updates=True)
-
-    print("Postman scheduler started")
 
     await scheduler()
 
