@@ -15,10 +15,25 @@ bot = Bot(token=TOKEN)
 posted_rows = set()
 
 def fetch_sheet():
+    import requests
+    import csv
+
     r = requests.get(SHEET_URL)
     r.raise_for_status()
+
     lines = r.text.splitlines()
-    return list(csv.DictReader(lines))
+    reader = csv.DictReader(lines)
+
+    rows = []
+    for row in reader:
+        clean_row = {}
+        for k, v in row.items():
+            if k:
+                key = k.strip().lower()   # normalize header
+                clean_row[key] = v.strip() if v else ""
+        rows.append(clean_row)
+
+    return rows
 
 def parse_datetime(date_str, time_str):
 
@@ -81,18 +96,23 @@ async def scheduler():
 
         now = datetime.now()
 
-        for i,row in enumerate(rows):
+        for i, row in enumerate(rows):
 
             if i in posted_rows:
                 continue
 
-            scheduled = parse_datetime(row["date"], row["time"])
+            date_val = row.get("date")
+            time_val = row.get("time")
+
+            if not date_val or not time_val:
+                continue
+
+            scheduled = parse_datetime(date_val, time_val)
 
             if not scheduled:
                 continue
 
             if now >= scheduled:
-
                 try:
                     await send_post(row)
                     posted_rows.add(i)
@@ -100,7 +120,7 @@ async def scheduler():
                     pass
 
         await asyncio.sleep(120)
-
+        
 async def main():
 
     await bot.delete_webhook(drop_pending_updates=True)
