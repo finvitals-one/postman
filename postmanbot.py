@@ -5,7 +5,8 @@ import sqlite3
 import requests
 
 from datetime import datetime
-from aiogram import Bot
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message
 
 
 print("POSTMAN BOT LOADING")
@@ -14,8 +15,11 @@ print("POSTMAN BOT LOADING")
 TOKEN = os.getenv("POSTMAN_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 SHEET_URL = os.getenv("POSTMAN_SHEET_URL")
+FILE_CHANNEL_ID = int(os.getenv("FILE_CHANNEL_ID"))
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 bot = Bot(token=TOKEN)
+dp = Dispatcher()
 
 conn = sqlite3.connect("postman.db")
 cursor = conn.cursor()
@@ -124,6 +128,38 @@ async def send_post(row):
     print(f"Posted: {content[:60]}...")
 
 
+# ---------------- /start ----------------
+
+@dp.message(F.text == "/start")
+async def start(message: Message):
+
+    if message.chat.type != "private":
+        return
+
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    await message.answer(
+f"""Postman Bot Active ✅
+
+<b>Your ID:</b> <code>{message.from_user.id}</code>
+<b>GROUP_ID:</b> <code>{GROUP_ID}</code>
+<b>FILE_CHANNEL_ID:</b> <code>{FILE_CHANNEL_ID}</code>
+<b>ADMIN_ID:</b> <code>{ADMIN_ID}</code>""",
+        parse_mode="HTML"
+    )
+
+
+# ---------------- FILE ID HANDLER ----------------
+
+@dp.message(F.photo & F.chat.id == FILE_CHANNEL_ID)
+async def handle_image(message: Message):
+
+    file_id = message.photo[-1].file_id
+
+    await message.reply(f"file_id:\n<code>{file_id}</code>", parse_mode="HTML")
+
+
 # ---------------- SCHEDULER ----------------
 
 async def scheduler():
@@ -197,7 +233,9 @@ async def main():
 
     await bot.delete_webhook(drop_pending_updates=True)
 
-    await scheduler()
+    asyncio.create_task(scheduler())
+
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
