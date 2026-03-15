@@ -101,6 +101,9 @@ async def send_post(row):
         print("Empty content, skipping")
         return
 
+    # Preserve line breaks written as \n in sheet
+    content = content.replace("\\n", "\n")
+
     if image_url:
 
         await bot.send_photo(
