@@ -3,7 +3,6 @@ import csv
 import asyncio
 import requests
 from datetime import datetime
-
 from aiogram import Bot
 
 TOKEN = os.getenv("POSTMAN_TOKEN")
@@ -14,9 +13,11 @@ bot = Bot(token=TOKEN)
 
 posted_rows = set()
 
+
+# ---------------------------
+# Fetch Google Sheet CSV
+# ---------------------------
 def fetch_sheet():
-    import requests
-    import csv
 
     r = requests.get(SHEET_URL)
     r.raise_for_status()
@@ -25,48 +26,68 @@ def fetch_sheet():
     reader = csv.DictReader(lines)
 
     rows = []
+
     for row in reader:
+
         clean_row = {}
+
         for k, v in row.items():
-            if k:
-                key = k.strip().lower()   # normalize header
-                clean_row[key] = v.strip() if v else ""
+
+            if not k:
+                continue
+
+            key = k.strip().lower()
+            val = v.strip() if v else ""
+
+            clean_row[key] = val
+
         rows.append(clean_row)
 
     return rows
 
+
+# ---------------------------
+# Parse date + time
+# ---------------------------
 def parse_datetime(date_str, time_str):
 
     formats = [
         ("%d/%m/%Y", "%H:%M:%S"),
         ("%d/%m/%Y", "%H:%M"),
         ("%d-%m-%Y", "%H:%M:%S"),
-        ("%d-%m-%Y", "%H:%M")
+        ("%d-%m-%Y", "%H:%M"),
+        ("%Y-%m-%d", "%H:%M:%S"),
+        ("%Y-%m-%d", "%H:%M"),
     ]
 
     for df, tf in formats:
         try:
-            return datetime.strptime(
-                f"{date_str} {time_str}",
-                f"{df} {tf}"
-            )
+            return datetime.strptime(f"{date_str} {time_str}", f"{df} {tf}")
         except:
             pass
 
     return None
 
+
+# ---------------------------
+# Build message text
+# ---------------------------
 def build_message(row):
 
-    ptype = row["type"].strip().lower()
-    text = row["content"].strip()
-    options = row["options"].strip()
-    correct = row["correct"].strip()
+    ptype = row.get("type", "").lower()
+    text = row.get("content", "")
+    options = row.get("options", "")
+    correct = row.get("correct", "")
 
     if ptype == "poll":
         return f"/poll {text} | {options.replace('|',' | ')}"
 
     if ptype == "quiz":
-        correct = int(float(correct))
+        try:
+            correct = int(float(correct))
+        except:
+            correct = 1
+
         return f"/quiz {text} | {options.replace('|',' | ')} | {correct}"
 
     if ptype == "cta":
@@ -74,23 +95,34 @@ def build_message(row):
 
     return text
 
+
+# ---------------------------
+# Send message
+# ---------------------------
 async def send_post(row):
 
     msg = build_message(row)
-    image = row["image_url"].strip()
+    image = row.get("image_url", "")
+
+    print("Posting:", msg)
 
     if image:
         await bot.send_photo(GROUP_ID, photo=image, caption=msg)
     else:
         await bot.send_message(GROUP_ID, msg)
 
+
+# ---------------------------
+# Scheduler loop
+# ---------------------------
 async def scheduler():
 
     while True:
 
         try:
             rows = fetch_sheet()
-        except:
+        except Exception as e:
+            print("Sheet fetch error:", e)
             await asyncio.sleep(120)
             continue
 
@@ -112,21 +144,30 @@ async def scheduler():
             if not scheduled:
                 continue
 
+            print("Scheduled:", scheduled, "Now:", now)
+
             if now >= scheduled:
+
                 try:
                     await send_post(row)
                     posted_rows.add(i)
-                except:
-                    pass
+                except Exception as e:
+                    print("Send error:", e)
 
         await asyncio.sleep(120)
-        
+
+
+# ---------------------------
+# Main
+# ---------------------------
 async def main():
 
     await bot.delete_webhook(drop_pending_updates=True)
 
-    while True:
-        await scheduler()
+    print("Postman scheduler started")
+
+    await scheduler()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
