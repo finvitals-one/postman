@@ -14,6 +14,7 @@ print("POSTMAN BOT LOADING")
 
 TOKEN = os.getenv("POSTMAN_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 SHEET_URL = os.getenv("POSTMAN_SHEET_URL")
 FILE_CHANNEL_ID = int(os.getenv("FILE_CHANNEL_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
@@ -91,7 +92,23 @@ def parse_datetime(date_str, time_str):
 # ---------------- ROW KEY ----------------
 
 def row_key(row):
-    return f"{row['date']}_{row['time']}_{row['type']}"
+    # Uses post_in so group and channel rows are tracked separately
+    return f"{row['date']}_{row['time']}_{row['post_in']}"
+
+
+# ---------------- RESOLVE CHAT ID ----------------
+
+def resolve_chat_id(post_in):
+
+    val = post_in.strip().lower()
+
+    if val == "group":
+        return GROUP_ID
+
+    if val == "channel":
+        return CHANNEL_ID
+
+    return None
 
 
 # ---------------- SEND POST ----------------
@@ -100,9 +117,16 @@ async def send_post(row):
 
     content = row.get("content", "").strip()
     image_url = row.get("image_url", "").strip()
+    post_in = row.get("post_in", "").strip()
 
     if not content:
         print("Empty content, skipping")
+        return
+
+    chat_id = resolve_chat_id(post_in)
+
+    if not chat_id:
+        print(f"Unknown post_in value: {post_in}, skipping")
         return
 
     # Preserve line breaks written as \n in sheet
@@ -111,7 +135,7 @@ async def send_post(row):
     if image_url:
 
         await bot.send_photo(
-            chat_id=GROUP_ID,
+            chat_id=chat_id,
             photo=image_url,
             caption=content,
             parse_mode="HTML"
@@ -120,12 +144,12 @@ async def send_post(row):
     else:
 
         await bot.send_message(
-            chat_id=GROUP_ID,
+            chat_id=chat_id,
             text=content,
             parse_mode="HTML"
         )
 
-    print(f"Posted: {content[:60]}...")
+    print(f"Posted to {post_in} ({chat_id}): {content[:60]}...")
 
 
 # ---------------- /start ----------------
@@ -144,6 +168,7 @@ f"""Postman Bot Active ✅
 
 <b>Your ID:</b> <code>{message.from_user.id}</code>
 <b>GROUP_ID:</b> <code>{GROUP_ID}</code>
+<b>CHANNEL_ID:</b> <code>{CHANNEL_ID}</code>
 <b>FILE_CHANNEL_ID:</b> <code>{FILE_CHANNEL_ID}</code>
 <b>ADMIN_ID:</b> <code>{ADMIN_ID}</code>""",
         parse_mode="HTML"
@@ -181,9 +206,10 @@ async def scheduler():
 
         for row in rows:
 
-            ptype = row.get("type", "").lower()
+            post_in = row.get("post_in", "").strip().lower()
 
-            if ptype != "post":
+            if post_in not in ("group", "channel"):
+                print(f"Skipping unknown post_in: {post_in}")
                 continue
 
             date_val = row.get("date")
