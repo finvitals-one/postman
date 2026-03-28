@@ -15,7 +15,7 @@ print("POSTMAN BOT LOADING")
 TOKEN = os.getenv("POSTMAN_TOKEN")
 GROUP_ID = int(os.getenv("GROUP_ID"))
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
-SHEET_URL = os.getenv("POSTMAN_SHEET_URL")
+SHEET_URL = os.getenv("SHEET_URL")
 FILE_CHANNEL_ID = int(os.getenv("FILE_CHANNEL_ID"))
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
@@ -91,9 +91,13 @@ def parse_datetime(date_str, time_str):
 
 # ---------------- ROW KEY ----------------
 
-def row_key(row):
-    # Uses post_in so group and channel rows are tracked separately
-    return f"{row['date']}_{row['time']}_{row['post_in']}"
+def get_row_key(row):
+    # Use post_id from sheet if available, else fall back to date_time_post_in
+    post_id = row.get("post_id", "").strip()
+    if post_id:
+        return f"postman_{post_id}"
+    post_in = row.get("post_in", "").strip().lower()
+    return f"{row['date']}_{row['time']}_{post_in}"
 
 
 # ---------------- RESOLVE CHAT ID ----------------
@@ -170,7 +174,8 @@ f"""Postman Bot Active ✅
 <b>GROUP_ID:</b> <code>{GROUP_ID}</code>
 <b>CHANNEL_ID:</b> <code>{CHANNEL_ID}</code>
 <b>FILE_CHANNEL_ID:</b> <code>{FILE_CHANNEL_ID}</code>
-<b>ADMIN_ID:</b> <code>{ADMIN_ID}</code>""",
+<b>ADMIN_ID:</b> <code>{ADMIN_ID}</code>
+<b>SHEET_URL:</b> Unified sheet active ✅""",
         parse_mode="HTML"
     )
 
@@ -206,6 +211,11 @@ async def scheduler():
 
         for row in rows:
 
+            # Only process postman rows
+            bot_col = row.get("bot", "").strip().lower()
+            if bot_col != "postman":
+                continue
+
             post_in = row.get("post_in", "").strip().lower()
 
             if post_in not in ("group", "channel"):
@@ -226,7 +236,7 @@ async def scheduler():
 
             if now >= scheduled:
 
-                key = row_key(row)
+                key = get_row_key(row)
 
                 cursor.execute(
                     "SELECT 1 FROM posted WHERE row_key=?",
